@@ -327,9 +327,11 @@ L.GPX = L.FeatureGroup.extend({
     if (name.length > 0) {
       this._info.name = name[0].textContent;
     }
+    this._info.desc = '';
     var desc = xml.getElementsByTagName('desc');
-    if (desc.length > 0) {
-      this._info.desc = desc[0].textContent;
+    for(t = 0; t < desc.length; t++) {
+      if(desc[t].parentNode.tagName != 'wpt')
+        this._info.desc += desc[t].textContent+"\n";
     }
     var author = xml.getElementsByTagName('author');
     if (author.length > 0) {
