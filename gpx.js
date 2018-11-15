@@ -194,9 +194,12 @@ L.GPX = L.FeatureGroup.extend({
   get_elevation_max_imp:  function() { return this.to_ft(this.get_elevation_max()); },
   get_elevation_min_imp:  function() { return this.to_ft(this.get_elevation_min()); },
 
+  get_velocity_max:       function() { return this._info.velocity.max; },
+  get_velocity_min:       function() { return this._info.velocity.min; },
+
   get_average_hr:         function() { return this._info.hr.avg; },
-  get_average_temp:         function() { return this._info.atemp.avg; },
-  get_average_cadence:         function() { return this._info.cad.avg; },
+  get_average_temp:       function() { return this._info.atemp.avg; },
+  get_average_cadence:    function() { return this._info.cad.avg; },
   get_heartrate_data:     function() {
     var _this = this;
     return this._info._points.map(
@@ -265,6 +268,7 @@ L.GPX = L.FeatureGroup.extend({
       name: null,
       length: 0.0,
       _points: [],
+      velocity: {max: -Infinity, min: Infinity},
       elevation: {gain: 0.0, loss: 0.0, max: 0.0, min: Infinity},
       hr: {avg: 0, _total: 0},
       duration: {start: null, end: null, moving: 0, total: 0},
@@ -438,7 +442,7 @@ L.GPX = L.FeatureGroup.extend({
       var _, ll = new L.LatLng(
         el[i].getAttribute('lat'),
         el[i].getAttribute('lon'));
-      ll.meta = { time: null, ele: null, hr: null, cad: null, atemp: null, cumdist: 0 };
+        ll.meta = { time: null, vel: 0, ele: null, hr: null, cad: null, atemp: null, cumdist: 0 };
 
       _ = el[i].getElementsByTagName('time');
       if (_.length > 0) {
@@ -496,7 +500,8 @@ L.GPX = L.FeatureGroup.extend({
       this._info.duration.end = ll.meta.time;
 
       if (last != null) {
-        this._info.length += this._dist3d(last, ll);
+        var dist = this._dist3d(last, ll);
+        this._info.length += dist;
 
         var t = ll.meta.ele - last.meta.ele;
         if (t > 0) {
@@ -509,9 +514,18 @@ L.GPX = L.FeatureGroup.extend({
         this._info.duration.total += t;
         if (t < options.max_point_interval) {
           this._info.duration.moving += t;
+          ll.meta.vel = dist/t;
         }
       } else if (this._info.duration.start == null) {
         this._info.duration.start = ll.meta.time;
+      }
+
+      if (ll.meta.vel > this._info.velocity.max) {
+        this._info.velocity.max = ll.meta.vel;
+      }
+
+      if (ll.meta.vel > 0 && ll.meta.vel < this._info.velocity.min) {
+        this._info.velocity.min = ll.meta.vel;
       }
 
       last = ll;
