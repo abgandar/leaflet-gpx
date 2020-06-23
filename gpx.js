@@ -53,7 +53,11 @@ var _DEFAULT_MARKER_OPTS = {
   endIconUrl: 'pin-icon-end.png',
   shadowUrl: 'pin-shadow.png',
   wptIcons: [],
+  wptIconsType: [],
   wptIconUrls : {
+    '': 'pin-icon-wpt.png',
+  },
+  wptIconTypeUrls : {
     '': 'pin-icon-wpt.png',
   },
   wptIconGenerator: false,
@@ -68,8 +72,10 @@ var _DEFAULT_POLYLINE_OPTS = {
   color: 'blue'
 };
 var _DEFAULT_GPX_OPTS = {
-  parseElements: ['track', 'route', 'waypoint']
+  parseElements: ['track', 'route', 'waypoint'],
+  joinTrackSegments: true
 };
+
 L.GPX = L.FeatureGroup.extend({
   initialize: function(gpx, options) {
     options.max_point_interval = options.max_point_interval || _MAX_POINT_INTERVAL_MS;
@@ -364,7 +370,10 @@ L.GPX = L.FeatureGroup.extend({
     var _this = this;
     var cb = function(gpx, options) {
       var layers = _this._parse_gpx_data(gpx, options);
-      if (!layers) return;
+      if (!layers) {
+        _this.fire('error', { err: 'No parseable layers of type(s) ' + JSON.stringify(options.gpx_options.parseElements) });
+        return;
+      }
       _this.addLayer(layers);
       _this.fire('loaded', { layers: layers, element: gpx });
     }
@@ -384,15 +393,6 @@ L.GPX = L.FeatureGroup.extend({
 
   _parse_gpx_data: function(xml, options) {
     var i, t, l, el, layers = [];
-    var tags = [];
-
-    var parseElements = options.gpx_options.parseElements;
-    if (parseElements.indexOf('route') > -1) {
-      tags.push(['rte','rtept']);
-    }
-    if (parseElements.indexOf('track') > -1) {
-      tags.push(['trkseg','trkpt']);
-    }
 
     var name = xml.getElementsByTagName('name');
     if (name.length > 0) {
@@ -413,12 +413,29 @@ L.GPX = L.FeatureGroup.extend({
       this._info.copyright = copyright[0].textContent;
     }
 
-    for (t = 0; t < tags.length; t++) {
-      el = xml.getElementsByTagName(tags[t][0]);
-      for (i = 0; i < el.length; i++) {
-        var trackLayers = this._parse_trkseg(el[i], options, tags[t][1]);
-        for (l = 0; l < trackLayers.length; l++) {
-          layers.push(trackLayers[l]);
+    var parseElements = options.gpx_options.parseElements;
+    if (parseElements.indexOf('route') > -1) {
+      // routes are <rtept> tags inside <rte> sections
+      var routes = xml.getElementsByTagName('rte');
+      for (i = 0; i < routes.length; i++) {
+        layers = layers.concat(this._parse_segment(routes[i], options, {}, 'rtept'));
+      }
+    }
+
+    if (parseElements.indexOf('track') > -1) {
+      // tracks are <trkpt> tags in one or more <trkseg> sections in each <trk>
+      var tracks = xml.getElementsByTagName('trk');
+      for (i = 0; i < tracks.length; i++) {
+        var track = tracks[i];
+        var polyline_options = this._extract_styling(track);
+
+        if (options.gpx_options.joinTrackSegments) {
+          layers = layers.concat(this._parse_segment(track, options, polyline_options, 'trkpt'));
+        } else {
+          var segments = track.getElementsByTagName('trkseg');
+          for (j = 0; j < segments.length; j++) {
+            layers = layers.concat(this._parse_segment(segments[j], options, polyline_options, 'trkpt'));
+          }
         }
       }
     }
@@ -457,7 +474,13 @@ L.GPX = L.FeatureGroup.extend({
         if (symEl.length > 0) {
           symKey = symEl[0].textContent;
         }
-
+		
+        var typeEl = el[i].getElementsByTagName('type');
+        var typeKey = '';
+        if (typeEl.length > 0) {
+          typeKey = typeEl[0].textContent;
+        }
+		
         /*
          * Add waypoint marker based on the waypoint symbol key.
          *
@@ -468,12 +491,18 @@ L.GPX = L.FeatureGroup.extend({
          */
         var wptIcons = options.marker_options.wptIcons;
         var wptIconUrls = options.marker_options.wptIconUrls;
+        var wptIconsType = options.marker_options.wptIconsType;
+        var wptIconTypeUrls = options.marker_options.wptIconTypeUrls;
         var wptIconGenerator = options.marker_options.wptIconGenerator;
         var symIcon;
         if (wptIcons && wptIcons[symKey]) {
           symIcon = wptIcons[symKey];
-        } else if (wptIconUrls && wptIconUrls[symKey]) {
+        } else if (wptIconsType && wptIconsType[typeKey]){
+          symIcon = wptIconsType[typeKey];
+        } else if (wptIconUrls && wptIconUrls[symKey]){
           symIcon = new L.GPXTrackIcon({iconUrl: wptIconUrls[symKey]});
+        } else if (wptIconTypeUrls && wptIconTypeUrls[typeKey]){
+          symIcon = new L.GPXTrackIcon({iconUrl: wptIconTypeUrls[typeKey]});	
         } else if (wptIconGenerator && (symIcon = wptIconGenerator(symKey))) {
         } else if (wptIcons && wptIcons['']) {
           symIcon = wptIcons[''];
@@ -488,7 +517,8 @@ L.GPX = L.FeatureGroup.extend({
         var marker = new L.Marker(ll, {
           clickable: options.marker_options.clickable,
           title: name,
-          icon: symIcon
+          icon: symIcon,
+          type: 'waypoint'
         });
         marker.bindPopup("<b>" + name + "</b>" + (desc.length > 0 ? '<br/>' + desc : '')).openPopup();
         this._info.waypoints++;
@@ -504,7 +534,7 @@ L.GPX = L.FeatureGroup.extend({
     }
   },
 
-  _parse_trkseg: function(line, options, tag) {
+  _parse_segment: function(line, options, polyline_options, tag) {
     var el = line.getElementsByTagName(tag);
     if (!el.length) return [];
 
@@ -626,22 +656,8 @@ L.GPX = L.FeatureGroup.extend({
       coords.push(ll);
     }
 
-    // check for gpx_style styling extension
-    var polyline_options = this._merge_objs(_DEFAULT_POLYLINE_OPTS, {});
-    var e = line.getElementsByTagNameNS(_GPX_STYLE_NS, 'line');
-    if (e.length > 0) {
-      var _ = e[0].getElementsByTagName('color');
-      if (_.length > 0) polyline_options.color = '#' + _[0].textContent;
-      var _ = e[0].getElementsByTagName('opacity');
-      if (_.length > 0) polyline_options.opacity = _[0].textContent;
-      var _ = e[0].getElementsByTagName('weight');
-      if (_.length > 0) polyline_options.weight = _[0].textContent;
-      var _ = e[0].getElementsByTagName('linecap');
-      if (_.length > 0) polyline_options.lineCap = _[0].textContent;
-    }
-
     // add track
-    var l = new L.Polyline(coords, this._merge_objs(polyline_options, options.polyline_options));
+    var l = new L.Polyline(coords, this._extract_styling(line, polyline_options, options.polyline_options));
     this.fire('addline', { line: l, element: line });
     layers.push(l);
 
@@ -677,6 +693,22 @@ L.GPX = L.FeatureGroup.extend({
     }
 
     return layers;
+  },
+
+  _extract_styling: function(el, base, overrides) {
+    var style = this._merge_objs(_DEFAULT_POLYLINE_OPTS, base);
+    var e = el.getElementsByTagNameNS(_GPX_STYLE_NS, 'line');
+    if (e.length > 0) {
+      var _ = e[0].getElementsByTagName('color');
+      if (_.length > 0) style.color = '#' + _[0].textContent;
+      var _ = e[0].getElementsByTagName('opacity');
+      if (_.length > 0) style.opacity = _[0].textContent;
+      var _ = e[0].getElementsByTagName('weight');
+      if (_.length > 0) style.weight = _[0].textContent;
+      var _ = e[0].getElementsByTagName('linecap');
+      if (_.length > 0) style.lineCap = _[0].textContent;
+    }
+    return this._merge_objs(style, overrides)
   },
 
   _dist2d: function(a, b) {
